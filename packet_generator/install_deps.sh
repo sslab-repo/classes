@@ -44,8 +44,13 @@ info "Detected distribution family: $FAMILY (${PRETTY_NAME:-unknown})"
 install_debian() {
     info "Updating apt package index..."
     apt-get update -y
-    info "Installing packages via apt..."
-    apt-get install -y python3 python3-pip python3-scapy tcpdump libpcap0.8
+    info "Installing core packages via apt..."
+    apt-get install -y python3 python3-pip
+    apt-get install -y python3-scapy || warn "python3-scapy not available from repo; will use pip."
+    # Optional extras for observing traffic (tcpdump) - non-fatal if the
+    # package name differs on this release (e.g. libpcap t64 transition).
+    info "Installing optional extras (best effort)..."
+    apt-get install -y tcpdump || warn "tcpdump not installed (optional)."
 }
 
 install_redhat() {
@@ -54,11 +59,13 @@ install_redhat() {
     elif command -v yum >/dev/null 2>&1; then PM="yum"
     else die "Neither dnf nor yum found."
     fi
-    info "Installing packages via $PM..."
-    # python3-scapy is not in every RHEL repo; install what is available and
-    # fall back to pip for scapy below if needed.
-    "$PM" install -y python3 python3-pip tcpdump libpcap || true
+    info "Installing core packages via $PM..."
+    "$PM" install -y python3 python3-pip
+    # python3-scapy is not in every RHEL repo; fall back to pip below if needed.
     "$PM" install -y python3-scapy || warn "python3-scapy not available from repo; will use pip."
+    # Optional extra for observing traffic; non-fatal.
+    info "Installing optional extras (best effort)..."
+    "$PM" install -y tcpdump || warn "tcpdump not installed (optional)."
 }
 
 case "$FAMILY" in
@@ -66,11 +73,24 @@ case "$FAMILY" in
     redhat) install_redhat ;;
 esac
 
+# pip_install PKG - install a package, retrying with --break-system-packages
+# for PEP 668 "externally-managed" environments (Debian 12+, Ubuntu 23.04+,
+# recent Fedora) where the system pip refuses to install otherwise.
+pip_install() {
+    local pkg="$1"
+    if python3 -m pip install "$pkg"; then
+        return 0
+    fi
+    warn "pip install $pkg failed; retrying with --break-system-packages..."
+    python3 -m pip install --break-system-packages "$pkg"
+}
+
 # --- ensure scapy is importable, else pip install ---------------------------
 if ! python3 -c 'import scapy' >/dev/null 2>&1; then
     warn "scapy not importable from system packages; installing via pip..."
-    python3 -m pip install --upgrade pip
-    python3 -m pip install scapy
+    # Non-fatal: let the verification block below print a clean message if
+    # every install path failed.
+    pip_install scapy || true
 fi
 
 # --- verify -----------------------------------------------------------------

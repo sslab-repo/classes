@@ -66,11 +66,18 @@ def eprint(*args, **kwargs):
 
 
 def validate_ip(value):
-    """argparse type: accept an IPv4/IPv6 address."""
+    """argparse type: accept an IPv4 address.
+
+    Restricted to IPv4 because the raw-packet layers used here (scapy's IP()
+    and ARP) are IPv4-only; accepting IPv6 would produce confusing failures.
+    """
     try:
-        ipaddress.ip_address(value)
+        addr = ipaddress.ip_address(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"'{value}' is not a valid IP address")
+    if addr.version != 4:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' is IPv6; this tool supports IPv4 targets only")
     return value
 
 
@@ -97,14 +104,10 @@ def confirm(protocol, target, port, count):
 # --- Scapy-based protocols --------------------------------------------------
 def _load_scapy():
     try:
-        from scapy.all import (  # noqa: F401
-            ARP, Ether, IP, ICMP, TCP, UDP, DNS, DNSQR, Raw,
-            RandShort, send, sendp, conf,
-        )
+        import scapy.all as scapy
     except ImportError:
         eprint("[x] scapy is not installed. Run ./install_deps.sh first.")
         sys.exit(1)
-    import scapy.all as scapy
     return scapy
 
 
@@ -158,16 +161,29 @@ def send_syn_flood(args):
 
 
 # --- Socket-based protocols (no root needed) --------------------------------
+def _http_path(raw):
+    """Normalise a URL path to always start with '/'."""
+    path = raw or "/"
+    if not path.startswith("/"):
+        path = "/" + path
+    return path
+
+
+def _host_header(target, port):
+    """Host header value, including the port when it is not the default 80."""
+    return target if port == 80 else f"{target}:{port}"
+
+
 def send_http(args):
     port = args.port if args.port is not None else 80
-    path = args.path or "/"
+    path = _http_path(args.path)
     sent = 0
     for i in range(args.count):
         try:
             with socket.create_connection((args.target, port), timeout=5) as sock:
                 request = (
                     f"GET {path} HTTP/1.1\r\n"
-                    f"Host: {args.target}\r\n"
+                    f"Host: {_host_header(args.target, port)}\r\n"
                     f"User-Agent: packet_generator-lab\r\n"
                     f"Connection: close\r\n\r\n"
                 )
@@ -191,7 +207,7 @@ def send_http_dos(args):
     concept, not to be an effective attack.
     """
     port = args.port if args.port is not None else 80
-    path = args.path or "/"
+    path = _http_path(args.path)
     sent = 0
     start = time.time()
     for i in range(args.count):
@@ -199,9 +215,9 @@ def send_http_dos(args):
             with socket.create_connection((args.target, port), timeout=5) as sock:
                 request = (
                     f"GET {path} HTTP/1.1\r\n"
-                    f"Host: {args.target}\r\n"
+                    f"Host: {_host_header(args.target, port)}\r\n"
                     f"User-Agent: packet_generator-lab\r\n"
-                    f"Connection: keep-alive\r\n\r\n"
+                    f"Connection: close\r\n\r\n"
                 )
                 sock.sendall(request.encode())
                 sock.recv(64)
@@ -260,8 +276,8 @@ def build_parser():
 
 
 def main(argv=None):
-    print(BANNER)
     args = build_parser().parse_args(argv)
+    print(BANNER)
 
     # Validate count against per-protocol caps.
     if args.count < 1:
@@ -274,6 +290,18 @@ def main(argv=None):
         return 1
     if args.port is not None and not (0 < args.port < 65536):
         eprint("[x] --port must be between 1 and 65535.")
+        return 1
+    if args.interval < 0:
+        eprint("[x] --interval must be zero or positive.")
+        return 1
+
+    # Protocol-specific required arguments (checked before the root check so
+    # the user learns about a missing argument without needing sudo first).
+    if args.protocol == "syn-flood" and args.port is None:
+        eprint("[x] --port is required for syn-flood.")
+        return 1
+    if args.protocol == "dns" and not args.query:
+        eprint("[x] --query NAME is required for the dns protocol.")
         return 1
 
     require_root(args.protocol)
@@ -291,6 +319,9 @@ def main(argv=None):
     except KeyboardInterrupt:
         eprint("\n[!] Interrupted by user.")
         return 130
+    except OSError as exc:
+        eprint(f"[x] Network error: {exc}")
+        return 1
     print("[*] Done.")
     return 0
 

@@ -31,7 +31,14 @@ chmod +x install_deps.sh
 sudo ./install_deps.sh
 ```
 
-This installs `python3`, `pip`, `scapy`, `tcpdump`, and `libpcap`.
+This installs `python3`, `pip`, and `scapy` (the core requirements), plus
+`tcpdump` as an optional convenience for watching traffic. On modern distros
+that use PEP 668 "externally-managed" Python (Debian 12+, Ubuntu 23.04+, recent
+Fedora), the script automatically retries the pip fallback with
+`--break-system-packages` if the system package is unavailable.
+
+> **Targets are IPv4 only.** The raw-packet layers used here (scapy's `IP()`
+> and ARP) are IPv4-only, so an IPv6 target is rejected with a clear message.
 
 ## 2. Run the generator
 
