@@ -91,11 +91,27 @@ python3 packet_generator.py --protocol http-dos --target 192.168.56.10 --port 80
 
 ## Safety limits
 
-Per-protocol packet/request caps are defined at the top of
-`packet_generator.py` in the `MAX_COUNT` dictionary. Instructors may adjust
-them for their environment, but they are intentionally small. The `syn-flood`
-and `http-dos` modes additionally require an interactive `yes` confirmation
-(bypass with `--yes` in scripted lab exercises).
+- **Packet caps.** Per-protocol packet/request caps are defined at the top of
+  `packet_generator.py` in the `MAX_COUNT` dictionary. Instructors may adjust
+  them, but they are intentionally small.
+- **Confirmation.** The `syn-flood` and `http-dos` modes require an interactive
+  `yes` confirmation (bypass with `--yes` in scripted lab exercises).
+- **No source-IP spoofing.** SYN packets randomise only the source *port*, so
+  traffic stays traceable to the sending host.
+- **No amplification targets.** ICMP/UDP/DNS/SYN sends to multicast or the
+  `255.255.255.255` broadcast address are refused (smurf / amplification).
+- **No request-line injection.** `--path` rejects spaces and control/CRLF bytes.
+
+## Running the tests
+
+The suite uses only the Python standard library (no pytest required). Raw
+packets are captured instead of transmitted, so no root or network is needed;
+scapy-dependent tests skip automatically if scapy is absent.
+
+```bash
+cd packet_generator
+python3 -m unittest discover -s tests -v
+```
 
 ## Suggested lab setup
 

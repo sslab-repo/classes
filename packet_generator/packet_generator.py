@@ -87,6 +87,21 @@ def require_root(protocol):
         sys.exit(1)
 
 
+def amplification_risk(target):
+    """Return a reason string if the target is an amplification vector.
+
+    Sending ICMP/UDP to a multicast or broadcast address can trigger many
+    replies from many hosts (smurf / amplification). A classroom lab targets
+    a single unicast host, so we refuse these outright.
+    """
+    addr = ipaddress.ip_address(target)
+    if addr.is_multicast:
+        return "a multicast address"
+    if addr == ipaddress.ip_address("255.255.255.255"):
+        return "the broadcast address"
+    return None
+
+
 def confirm(protocol, target, port, count):
     """Interactive safety confirmation for aggressive modes."""
     eprint(f"[!] '{protocol}' will send {count} packet(s) to {target}"
@@ -303,6 +318,22 @@ def main(argv=None):
     if args.protocol == "dns" and not args.query:
         eprint("[x] --query NAME is required for the dns protocol.")
         return 1
+
+    # Refuse amplification/smurf-style targets for IP-destination protocols.
+    if args.protocol in ("icmp", "udp", "dns", "syn-flood"):
+        reason = amplification_risk(args.target)
+        if reason:
+            eprint(f"[x] Refusing to send to {args.target}: it is {reason}. "
+                   f"Use a single unicast lab host.")
+            return 1
+
+    # Reject control characters / spaces in --path: they would break the HTTP
+    # request line or allow header injection (CRLF).
+    if args.protocol in ("http", "http-dos"):
+        if any(ord(c) < 0x20 or ord(c) == 0x7f or c == " " for c in args.path):
+            eprint("[x] --path contains illegal characters "
+                   "(spaces or control/CRLF bytes are not allowed).")
+            return 1
 
     require_root(args.protocol)
 
