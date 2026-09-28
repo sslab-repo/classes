@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+*.tcpdump
+*.pcap
+*.pcapng
+*.tar
+*.gz
+*.zip
