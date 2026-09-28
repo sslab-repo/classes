@@ -11,6 +11,10 @@ Usage:
         > packets.csv
     python3 mini_kdd.py packets.csv > records.csv
 
+Output columns (a subset of the 41 KDD Cup 99 features):
+    start_time, duration, protocol_type, service, flag,
+    src_bytes, dst_bytes, land, count, serror_rate, src, dst
+
 Standard library only. Python 3.6 or newer. About 150 lines, so read it:
 the point of this lab is that you can see exactly how packets
 become connection records, including the 2 second window.
@@ -19,6 +23,7 @@ become connection records, including the 2 second window.
 import sys
 import csv
 
+# Destination port to KDD service name (the common ones in the DARPA data).
 SERVICES_TCP = {
     20: "ftp_data", 21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp",
     53: "domain", 79: "finger", 80: "http", 110: "pop_3", 113: "auth",
@@ -27,8 +32,8 @@ SERVICES_TCP = {
 SERVICES_UDP = {53: "domain_u", 514: "syslog_u"}
 ICMP_TYPES = {0: "ecr_i", 8: "eco_i", 3: "urp_i", 11: "tim_i"}
 
-CONN_TIMEOUT = 60.0
-WINDOW = 2.0
+CONN_TIMEOUT = 60.0   # seconds of silence that ends a UDP/ICMP "connection"
+WINDOW = 2.0          # the KDD time based traffic window
 
 
 def service_name(proto, dport, icmp_type):
@@ -42,6 +47,9 @@ def service_name(proto, dport, icmp_type):
 
 
 class Conn:
+    """One connection: originator is whoever sent the first packet
+    (for TCP, that is the SYN sender)."""
+
     def __init__(self, ts, src, dst, sport, dport, proto, icmp_type):
         self.start = ts
         self.end = ts
@@ -51,10 +59,11 @@ class Conn:
         self.icmp_type = icmp_type
         self.src_bytes = 0
         self.dst_bytes = 0
-        self.syn = False
-        self.synack = False
-        self.rst_resp = False
-        self.rst_orig = False
+        # TCP state bits
+        self.syn = False        # originator sent SYN
+        self.synack = False     # responder answered SYN,ACK
+        self.rst_resp = False   # responder sent RST
+        self.rst_orig = False   # originator sent RST
         self.fin_orig = False
         self.fin_resp = False
 
@@ -84,26 +93,28 @@ class Conn:
                 self.fin_resp = True
 
     def flag(self):
+        """A teaching subset of the KDD flag values."""
         if self.proto != "tcp":
             return "SF"
         if self.syn and self.rst_resp and not self.synack:
-            return "REJ"
+            return "REJ"            # connection attempt rejected
         if self.syn and not self.synack:
-            return "S0"
+            return "S0"             # SYN seen, no reply: the neptune signature
         if self.synack and (self.fin_orig or self.fin_resp):
-            return "SF"
+            return "SF"             # opened and closed normally
         if self.synack and (self.rst_orig or self.rst_resp):
-            return "RST"
+            return "RST"            # established, then torn down by reset
         if self.synack:
-            return "S1"
-        return "OTH"
+            return "S1"             # established, never closed in this slice
+        return "OTH"                # we never saw the start
 
 
 def parse_packets(path):
+    """Yield (ts, src, dst, proto, sport, dport, flags, payload, icmp_type)."""
     with open(path, newline="") as f:
         for row in csv.reader(f):
             if len(row) < 12 or not row[0] or not row[1]:
-                continue
+                continue  # not an IPv4 packet tshark could flatten
             ts = float(row[0])
             src, dst = row[1], row[2]
             proto_num = row[3]
@@ -127,11 +138,12 @@ def parse_packets(path):
 
 
 def build_connections(packets):
-    open_conns = {}
+    open_conns = {}   # key: frozenset of the two endpoints + proto
     done = []
     for ts, src, dst, proto, sport, dport, flags, payload, icmp_type in packets:
         key = (proto, frozenset([(src, sport), (dst, dport)]))
         conn = open_conns.get(key)
+        # a long silence, or a brand new SYN, starts a new connection
         is_new_syn = (proto == "tcp" and flags is not None
                       and (flags & 0x02) and not (flags & 0x10))
         if conn is not None and (ts - conn.end > CONN_TIMEOUT
@@ -150,13 +162,27 @@ def build_connections(packets):
 
 
 def add_window_features(conns):
+    """count and serror_rate over the past WINDOW seconds, per KDD:
+    connections to the same destination host as the current one.
+
+    A sliding left edge keeps this linear in the number of connections
+    instead of rescanning all earlier connections for every row, which
+    matters because a flood produces hundreds of thousands of them."""
+    flags = [c.flag() for c in conns]   # compute each flag once
     out = []
+    start = 0                           # left edge of the 2 second window
     for i, c in enumerate(conns):
-        window = [d for d in conns[: i + 1]
-                  if d.dst == c.dst and c.start - d.start <= WINDOW]
-        count = len(window)
-        serrors = sum(1 for d in window if d.flag().startswith("S")
-                      and d.flag() != "SF")
+        # Move the left edge forward until it is within WINDOW seconds of c.
+        while c.start - conns[start].start > WINDOW:
+            start += 1
+        count = 0
+        serrors = 0
+        for j in range(start, i + 1):
+            if conns[j].dst == c.dst:
+                count += 1
+                fj = flags[j]
+                if fj.startswith("S") and fj != "SF":
+                    serrors += 1
         out.append((c, count, serrors / count if count else 0.0))
     return out
 
