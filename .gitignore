@@ -6,4 +6,4 @@ __pycache__/
 *.tar
 *.gz
 *.zip
-!CPSC68000/DARPA1998/Week2/DARPA_eval_b.tar.gz
+!CPSC68000/Week2/DARPA1998/DARPA_eval_b.tar.gz
