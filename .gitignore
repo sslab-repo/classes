@@ -8,3 +8,4 @@ __pycache__/
 *.zip
 !CPSC68000/Week2/DARPA1998/DARPA_eval_b.tar.gz
 !CPSC68000/Week3/Lemay2016/*.pcap
+!CPSC68000/Week3/Lemay2016/*.pcap
